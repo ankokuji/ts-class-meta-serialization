@@ -18,7 +18,7 @@ function Wheels(numOfWheels: number) {
   }
 }
 
-// @Component(false)
+@Component(false)
 @Wheels(4)
 class Vechical {
   private _make: string;

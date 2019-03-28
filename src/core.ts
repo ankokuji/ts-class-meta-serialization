@@ -47,10 +47,17 @@ export function serializeAllDecoratedClass(
     : ts.createProgram(rootNames, compilerOptions);
 
   const typeChecker = program.getTypeChecker();
-  const output = [];
+  const output: any[] = [];
   for (const sourceFile of program.getSourceFiles()) {
     if (!sourceFile.isDeclarationFile) {
-      ts.forEachChild(sourceFile, _.curryRight(visit)(output)(typeChecker));
+      const innerOutput = []
+      ts.forEachChild(sourceFile, _.curryRight(visit)(innerOutput)(typeChecker));
+      if (innerOutput.length !== 0) {
+        output.push({
+          fileName: sourceFile.fileName,
+          result: innerOutput
+        })
+      }
     }
   }
   return output;
