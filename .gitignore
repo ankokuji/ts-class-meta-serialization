@@ -1,6 +1,5 @@
 /node_modules
 /analyser
 /.vscode
-/test
-/template
 yarn.lock
+classes.json
