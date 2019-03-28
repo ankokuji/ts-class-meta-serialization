@@ -19,4 +19,4 @@ function main2() {
   return;
 }
 
-main();
+main2();

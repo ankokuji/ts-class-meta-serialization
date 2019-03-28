@@ -1,4 +1,4 @@
-import ts from "typescript";
+import ts, { isJSDocUnknownType } from "typescript";
 import _ from "lodash";
 
 const invertedTypeFlag = _.invert(ts.TypeFlags);
@@ -193,26 +193,28 @@ function collectDepOfClass(
     depMap: ClassDepMap
   ): ClassDepMap {
     // If type is a primitive type or method type then don't add into dep map.
-    if (isPrimitiveType(type) || isClassMethodType(type)) {
+    if (isPrimitiveType(type) || isClassMethodType(type) || isUnknownType(type)){
       return depMap;
     }
-
     // Because this type is not a primitive type.
     // `symbol` here will not be undefined.
     const symbol = type.getSymbol();
-    const id = getIdentificationOfSymbol(symbol!);
     const symbolFlags = getSymbolFlagFromSymbol(symbol!);
-    const fileName = getFileNameFromSymbol(symbol!);
-    const textRange = getTextSpanFromSymbol(symbol!);
-
-    if (depMap[id]) {
-      return depMap;
-    }
+    
     // Collect dependencies.
     // If type is a type literal, don't add it to dependencies map.
     if (!isTypeLiteralType(type)) {
+      // This getId function can not be called with a type literal symbol.
+      // NOTE: Or should id's generation be reconsidered.
+      const id = getIdentificationOfSymbol(symbol!);
+      const fileName = getFileNameFromSymbol(symbol!);
+      const textRange = getTextSpanFromSymbol(symbol!);
+      if (depMap[id]) {
+        return depMap;
+      }
       depMap[id] = { type, symbolFlags, fileName, textRange };
     }
+    
     return collectDepDistinType(type, checker, symbolFlags, depMap);
 
     /**
@@ -242,12 +244,15 @@ function collectDepOfClass(
         case ts.SymbolFlags.Method:
           // Function declaration.
           return depMap;
+        case ts.SymbolFlags.Interface:
+          // To be finished...
         default:
-          throw new Error(
-            `Can not collect deps of unknown type: ${checker.typeToString(
-              type
-            )}, symbol type: ${invertedSymbolFlag[symbolFlags]}`
-          );
+          // throw new Error(
+          //   `Can not collect deps of unknown type: ${checker.typeToString(
+          //     type
+          //   )}, symbol type: ${invertedSymbolFlag[symbolFlags]}`
+          // );
+          return depMap
       }
     }
 
@@ -328,6 +333,24 @@ function isClassMethodType(type: ts.Type): boolean {
   }
 }
 
+/**
+ * This is for some type like type literal and others with name such as `__type`,
+ * but can't be identified by symbol flag.
+ *
+ * @param {ts.Type} type
+ * @returns {boolean}
+ */
+function isUnknownType(type: ts.Type): boolean {
+  const symbol = type.getSymbol()
+  if(!symbol) {
+    return true
+  } else if (!symbol.valueDeclaration && !symbol.declarations) {
+    return true
+  } else {
+    return false
+  }
+
+}
 function isTypeLiteralType(type: ts.Type): boolean {
   const symbol = type.getSymbol();
   if (symbol && symbol.flags === ts.SymbolFlags.TypeLiteral) {

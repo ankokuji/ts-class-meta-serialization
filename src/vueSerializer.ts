@@ -1,7 +1,6 @@
 import ts from "typescript";
 import { serializeAllDecoratedClass } from "./core";
 import _ from "lodash";
-import parser2 from "html-parse-stringify2";
 
 interface HtmlParsedNode {
   name: string;
@@ -80,17 +79,13 @@ function preprocessFilePath(rootNames: string[]) {
  * @param content
  * @returns
  */
-function genScriptContentFromVueLikeRawText(content: string | undefined): string | undefined {
+function genScriptContentFromVueLikeRawText(content: string| undefined): string | undefined {
   if(!content) {
     return undefined
   }
-  const ast = parser2.parse(content);
-  const script = ast
-    .filter((node: HtmlParsedNode) => {
-      return node.name === "script";
-    })
-    .map((node: HtmlParsedNode) => {
-      return node.children![0].content;
-    });
-  return script[0];
+  const openTagString = `<script lang="ts">`;
+  const closeTagString = `</script>`;
+  const start = content.indexOf(openTagString) + openTagString.length;
+  const end = content.indexOf(closeTagString);
+  return content.substring(start, end);
 }
