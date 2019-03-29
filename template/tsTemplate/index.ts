@@ -39,11 +39,16 @@ class Parent {
   private sdf!: Enum1;
   private sha!: boolean;
 
+  @Prop({
+    a: 2,
+    b: 5
+  })
   private haq!: { name: string; detail: L };
   protected func(a: string) {
     return 14;
   }
 
+  @Prop("fdsjk")
   public aaaaa!: SS;
 }
 

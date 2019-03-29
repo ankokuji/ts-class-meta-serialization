@@ -7,14 +7,14 @@ const invertedSymbolFlag = _.invert(ts.SymbolFlags);
 export namespace serializer {
   export interface SerializerOptions {
     /**
-     * For filt classes should be serialized. 
+     * For filt classes should be serialized.
      *
      * @param {ts.ClassDeclaration} node
      * @returns {boolean}
      * @memberof SerializerOptions
      */
     classEntryFilter?(node: ts.ClassDeclaration): boolean;
-    serializeDecorator?(node: ts.Decorator): string;
+    serializeDecorator?(node: ts.Decorator): any;
     /**
      * Use this to generate a compiler host for creating program.
      *
@@ -73,8 +73,8 @@ export function serializeTsFiles(
     types: []
   };
 
-  if(!serializerOptions) {
-    serializerOptions = serializer.createSerializerOptions()
+  if (!serializerOptions) {
+    serializerOptions = serializer.createSerializerOptions();
   }
 
   const compilerHost = serializerOptions.compilerHostGenerator
@@ -108,24 +108,24 @@ export function serializeTsFiles(
 
 function visit(node: ts.Node, ctx: serializer.Context, output: any[]) {
   const { checker, options } = ctx;
-  if (
-    ts.isClassDeclaration(node) &&
-    node.name
-  ) {
-    if(options.classEntryFilter && !options.classEntryFilter(node)) {
-      return
+  if (ts.isClassDeclaration(node) && node.name) {
+    if (options.classEntryFilter && !options.classEntryFilter(node)) {
+      return;
     }
     const classSymbol = checker.getSymbolAtLocation(node.name);
 
     if (classSymbol) {
       const classMap = collectDepOfClass(classSymbol, checker);
-      const serializedRootClass = serializeClass(classSymbol, checker);
+      // first serialize root class itself.
+      const serializedRootClass = serializeClass(
+        classSymbol,
+        checker,
+        options.serializeDecorator
+      );
       const serializedDps = Object.keys(classMap)
         .map(key => classMap[key])
         .map(classMapVal => {
-          return serializeComplexType(classMapVal, checker);
-          // const symbol = classMapVal.type.symbol;
-          // return serializeClass(symbol, checker);
+          return serializeComplexType(classMapVal, checker, options.serializeDecorator);
         });
       output.push({
         root: serializedRootClass,
@@ -135,14 +135,34 @@ function visit(node: ts.Node, ctx: serializer.Context, output: any[]) {
   }
 }
 
-function serializeComplexType(mapItem: DepMapItem, checker: ts.TypeChecker) {
+/**
+ * First judge type of type(symbol) and then call specific serialization function.
+ *
+ * @param {DepMapItem} mapItem
+ * @param {ts.TypeChecker} checker
+ * @param {(node: ts.Decorator) => any} decoratorSerializeFun
+ * @returns
+ */
+function serializeComplexType(
+  mapItem: DepMapItem,
+  checker: ts.TypeChecker,
+  decoratorSerializeFun?: (node: ts.Decorator) => any
+) {
   switch (mapItem.symbolFlags) {
     case ts.SymbolFlags.Class:
-      return serializeClass(mapItem.type.getSymbol()!, checker);
+      return serializeClass(
+        mapItem.type.getSymbol()!,
+        checker,
+        decoratorSerializeFun
+      );
     case ts.SymbolFlags.RegularEnum:
       return serializeRegularEnum(mapItem.type.getSymbol()!, checker);
     default:
-      return serializeClass(mapItem.type.getSymbol()!, checker);
+      return serializeClass(
+        mapItem.type.getSymbol()!,
+        checker,
+        decoratorSerializeFun
+      );
   }
 }
 
@@ -188,19 +208,71 @@ function serializeSymbol(symbol: ts.Symbol, checker: ts.TypeChecker) {
 }
 
 /**
+ *
+ *
+ * @param {ts.Symbol} symbol
+ * @param {ts.TypeChecker} checker
+ * @param {(node: ts.Decorator) => any} decoratorSerializeFun
+ * @returns
+ */
+function serializeSymbolWithDecoratorInfo(
+  symbol: ts.Symbol,
+  checker: ts.TypeChecker,
+  decoratorSerializeFun?: (node: ts.Decorator) => any
+) {
+  const detail = serializeSymbol(symbol, checker);
+  let decorators: any = [];
+  if (symbol.valueDeclaration && decoratorSerializeFun) {
+    decorators = serializeDecorator(
+      symbol.valueDeclaration,
+      decoratorSerializeFun
+    );
+  }
+  return {
+    ...detail,
+    decorators
+  };
+}
+
+/**
+ * Serialize decorators of a node into json object.
+ *
+ * @param {ts.Node} node
+ * @param {(node: ts.Node) => any} decoratorSerializeFun
+ * @returns
+ */
+function serializeDecorator(
+  node: ts.Node,
+  decoratorSerializeFun: (node: ts.Decorator) => any
+) {
+  if (!node.decorators) {
+    return [];
+  } else {
+    return node.decorators.map(decoratorSerializeFun).filter(info => !!info);
+  }
+}
+
+/**
  * Serialize a symbol into a json object.
  *
  * @param {ts.Symbol} symbol
  * @param {ts.TypeChecker} checker
  * @returns
  */
-function serializeClass(symbol: ts.Symbol, checker: ts.TypeChecker) {
-  const detail = serializeSymbol(symbol, checker);
-
+function serializeClass(
+  symbol: ts.Symbol,
+  checker: ts.TypeChecker,
+  decoratorSerializeFun?: (node: ts.Decorator) => any
+) {
+  const detail = serializeSymbolWithDecoratorInfo(
+    symbol,
+    checker,
+    decoratorSerializeFun
+  );
   const members: SerializedSymbol[] = [];
   if (symbol.members) {
     symbol.members.forEach(action => {
-      members.push(serializeSymbol(action, checker));
+      members.push(serializeSymbolWithDecoratorInfo(action, checker, decoratorSerializeFun));
     });
   }
   return {
