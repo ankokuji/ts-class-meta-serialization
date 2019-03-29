@@ -8,6 +8,11 @@ import {Data} from "./utils"
 
 @Component
 export class Com extends Vue {
-  private data1: string = "123"
+  @Prop({
+    title: "a",
+    content: "jkldsdjks",
+    length: 8
+  })
+  private data1?: string = "123"
 }
 </script>

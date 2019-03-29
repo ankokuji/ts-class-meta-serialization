@@ -1,2 +1,3 @@
 export { serializeVueFiles } from "./vueSerializer";
-export { serializeAllDecoratedClass } from "./core";
+export { serializeTsFiles, serializer } from "./core";
+export { customEntryFilters } from "./customFilters";

@@ -5,7 +5,7 @@ export class ModuleA {
 const e = 124
 
 export enum Enum1 {
-  a = 124,
-  sdjk = "wufa",
+  a = e,
+  sdjk = "21",
   dsjk = 21
 }

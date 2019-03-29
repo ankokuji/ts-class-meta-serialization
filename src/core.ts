@@ -1,10 +1,43 @@
-import ts, { isJSDocUnknownType } from "typescript";
+import ts from "typescript";
 import _ from "lodash";
 
 const invertedTypeFlag = _.invert(ts.TypeFlags);
 const invertedSymbolFlag = _.invert(ts.SymbolFlags);
 
-interface SerializedComplexType {}
+export namespace serializer {
+  export interface SerializerOptions {
+    /**
+     * For filt classes should be serialized. 
+     *
+     * @param {ts.ClassDeclaration} node
+     * @returns {boolean}
+     * @memberof SerializerOptions
+     */
+    classEntryFilter?(node: ts.ClassDeclaration): boolean;
+    serializeDecorator?(node: ts.Decorator): string;
+    /**
+     * Use this to generate a compiler host for creating program.
+     *
+     * @param {ts.CompilerOptions} options
+     * @returns {ts.CompilerHost}
+     * @memberof SerializerOptions
+     */
+    compilerHostGenerator?(options: ts.CompilerOptions): ts.CompilerHost;
+  }
+
+  export function createSerializerOptions(): SerializerOptions {
+    return {
+      classEntryFilter: undefined,
+      serializeDecorator: undefined,
+      compilerHostGenerator: undefined
+    };
+  }
+
+  export interface Context {
+    checker: ts.TypeChecker;
+    options: SerializerOptions;
+  }
+}
 
 interface SerializedSymbol {
   type: string | undefined;
@@ -30,17 +63,22 @@ interface DepMapItem {
  * @param {string[]} rootNames
  * @returns
  */
-export function serializeAllDecoratedClass(
+export function serializeTsFiles(
   rootNames: string[],
-  compilerHostGenerator?: (options: ts.CompilerOptions) => ts.CompilerHost
+  serializerOptions?: serializer.SerializerOptions
 ) {
   const compilerOptions = {
     target: ts.ScriptTarget.ES5,
     module: ts.ModuleKind.CommonJS,
     types: []
   };
-  const compilerHost = compilerHostGenerator
-    ? compilerHostGenerator(compilerOptions)
+
+  if(!serializerOptions) {
+    serializerOptions = serializer.createSerializerOptions()
+  }
+
+  const compilerHost = serializerOptions.compilerHostGenerator
+    ? serializerOptions.compilerHostGenerator(compilerOptions)
     : undefined;
   const program = compilerHost
     ? ts.createProgram(rootNames, compilerOptions, compilerHost)
@@ -48,27 +86,35 @@ export function serializeAllDecoratedClass(
 
   const typeChecker = program.getTypeChecker();
   const output: any[] = [];
+  const ctx: serializer.Context = {
+    checker: typeChecker,
+    options: serializerOptions
+  };
+
   for (const sourceFile of program.getSourceFiles()) {
     if (!sourceFile.isDeclarationFile) {
-      const innerOutput = []
-      ts.forEachChild(sourceFile, _.curryRight(visit)(innerOutput)(typeChecker));
+      const innerOutput = [];
+      ts.forEachChild(sourceFile, _.curryRight(visit)(innerOutput)(ctx));
       if (innerOutput.length !== 0) {
         output.push({
           fileName: sourceFile.fileName,
           result: innerOutput
-        })
+        });
       }
     }
   }
   return output;
 }
 
-function visit(node: ts.Node, checker: ts.TypeChecker, output: any[]) {
+function visit(node: ts.Node, ctx: serializer.Context, output: any[]) {
+  const { checker, options } = ctx;
   if (
     ts.isClassDeclaration(node) &&
-    isDecoratedBy(node, "Component") &&
     node.name
   ) {
+    if(options.classEntryFilter && !options.classEntryFilter(node)) {
+      return
+    }
     const classSymbol = checker.getSymbolAtLocation(node.name);
 
     if (classSymbol) {
@@ -193,14 +239,18 @@ function collectDepOfClass(
     depMap: ClassDepMap
   ): ClassDepMap {
     // If type is a primitive type or method type then don't add into dep map.
-    if (isPrimitiveType(type) || isClassMethodType(type) || isUnknownType(type)){
+    if (
+      isPrimitiveType(type) ||
+      isClassMethodType(type) ||
+      isUnknownType(type)
+    ) {
       return depMap;
     }
     // Because this type is not a primitive type.
     // `symbol` here will not be undefined.
     const symbol = type.getSymbol();
     const symbolFlags = getSymbolFlagFromSymbol(symbol!);
-    
+
     // Collect dependencies.
     // If type is a type literal, don't add it to dependencies map.
     if (!isTypeLiteralType(type)) {
@@ -214,7 +264,7 @@ function collectDepOfClass(
       }
       depMap[id] = { type, symbolFlags, fileName, textRange };
     }
-    
+
     return collectDepDistinType(type, checker, symbolFlags, depMap);
 
     /**
@@ -245,14 +295,14 @@ function collectDepOfClass(
           // Function declaration.
           return depMap;
         case ts.SymbolFlags.Interface:
-          // To be finished...
+        // To be finished...
         default:
           // throw new Error(
           //   `Can not collect deps of unknown type: ${checker.typeToString(
           //     type
           //   )}, symbol type: ${invertedSymbolFlag[symbolFlags]}`
           // );
-          return depMap
+          return depMap;
       }
     }
 
@@ -341,15 +391,14 @@ function isClassMethodType(type: ts.Type): boolean {
  * @returns {boolean}
  */
 function isUnknownType(type: ts.Type): boolean {
-  const symbol = type.getSymbol()
-  if(!symbol) {
-    return true
+  const symbol = type.getSymbol();
+  if (!symbol) {
+    return true;
   } else if (!symbol.valueDeclaration && !symbol.declarations) {
-    return true
+    return true;
   } else {
-    return false
+    return false;
   }
-
 }
 function isTypeLiteralType(type: ts.Type): boolean {
   const symbol = type.getSymbol();
@@ -389,8 +438,8 @@ function getTextSpanFromSymbol(symbol: ts.Symbol): ts.TextRange {
   };
 }
 
-function getFileNameFromSymbol(symbol: ts.Symbol) {
-  let sourceFile;
+function getFileNameFromSymbol(symbol: ts.Symbol): string {
+  let sourceFile: ts.SourceFile;
   if (symbol.valueDeclaration) {
     // If value declaration exists.
     sourceFile = symbol.valueDeclaration.getSourceFile();
@@ -398,33 +447,4 @@ function getFileNameFromSymbol(symbol: ts.Symbol) {
     sourceFile = symbol.declarations.slice()[0].getSourceFile();
   }
   return sourceFile.fileName;
-}
-
-/**
- * Return `true` if class is decorated by a decorator named `decoratorName`.
- *
- * @param {ts.ClassDeclaration} node
- * @param {string} decoratorName
- * @returns {boolean}
- */
-function isDecoratedBy(
-  node: ts.ClassDeclaration,
-  decoratorName: string
-): boolean {
-  let isIncludeSpecificDecor = false;
-  node.decorators &&
-    node.decorators.forEach(decorator => {
-      if (
-        ts.isIdentifier(decorator.expression) &&
-        decorator.expression.getText() === decoratorName
-      ) {
-        isIncludeSpecificDecor = true;
-      } else if (
-        ts.isCallExpression(decorator.expression) &&
-        decorator.expression.expression.getText() === decoratorName
-      ) {
-        isIncludeSpecificDecor = true;
-      }
-    });
-  return isIncludeSpecificDecor;
 }
