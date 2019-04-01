@@ -282,7 +282,7 @@ function serializeClass(
 }
 
 /**
- * Collect all depended class of root class by symbol.
+ * Find all the classes that the current class depends on by typescript Symbol.
  *
  * @param {ts.Symbol} symbol
  * @param {ts.TypeChecker} checker

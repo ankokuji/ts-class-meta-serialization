@@ -120,7 +120,7 @@ export namespace customDecoratorSerilize {
 
   /**
    * Serialize object literal ts node into json object.
-   * 
+   *
    * NOTE: This will only serialize object literal with primitive type properties.
    *
    * @param {ts.ObjectLiteralExpression} node
@@ -128,8 +128,34 @@ export namespace customDecoratorSerilize {
    */
   function serializeObjectLiteral(node: ts.ObjectLiteralExpression): string {
     const printer = ts.createPrinter();
-    const result = printer.printNode(ts.EmitHint.Unspecified, node, node.getSourceFile());
+    const result = printer.printNode(
+      ts.EmitHint.Unspecified,
+      node,
+      node.getSourceFile()
+    );
     return result;
+  }
+
+  /**
+   * Basic function of object literal serialization.
+   *
+   * @param {ts.ObjectLiteralExpression} node
+   * @returns {string}
+   */
+  function unstable_serializeObjectLiteral(node: ts.ObjectLiteralExpression): string {
+    const accum = Object.create(null);
+    node.properties.reduce((accum, propNode: ts.ObjectLiteralElementLike) => {
+      // Only support process property assignment because this is in compiling stage.
+      // And only literal because identify or method declaration or call expression can't be serialized.
+      // TODO: Consider the situation of object literal in property assignment.
+      if (ts.isPropertyAssignment(propNode) && ts.isLiteralExpression(propNode.initializer) && !ts.isComputedPropertyName(propNode.name)) {
+        // Here every value is a `string` type, but in fact they can be numeric or string or boolean literal.
+        // If needed.
+        accum[propNode.name.getText()] = propNode.initializer.getText();
+        return accum;
+      }
+    }, accum)
+    return JSON.stringify(accum);
   }
 
   /**
@@ -205,7 +231,7 @@ export namespace customDecoratorSerilize {
         case ts.SyntaxKind.ObjectLiteralExpression:
           content = {
             type: "object",
-            value: serializeObjectLiteral(
+            value: unstable_serializeObjectLiteral(
               contentNode as ts.ObjectLiteralExpression
             )
           };

@@ -41,7 +41,9 @@ class Parent {
 
   @Prop({
     a: 2,
-    b: 5
+    b: 5,
+    ds: a.dsg(),
+    ha: L
   })
   private haq!: { name: string; detail: L };
   protected func(a: string) {
