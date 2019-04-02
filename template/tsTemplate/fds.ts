@@ -1,3 +1,4 @@
+@Inject("ModuleA")
 export class ModuleA {
   private m: string
 }

@@ -9,7 +9,7 @@ export namespace customEntryFilters {
    * @returns {boolean}
    */
   export function isDecoratedBy(
-    decoratorName: string
+    decoratorNameList: string[]
   ): (node: ts.ClassDeclaration) => boolean {
     return node => {
       let isIncludeSpecificDecor = false;
@@ -17,12 +17,12 @@ export namespace customEntryFilters {
         node.decorators.forEach(decorator => {
           if (
             ts.isIdentifier(decorator.expression) &&
-            decorator.expression.getText() === decoratorName
+            decoratorNameList.indexOf(decorator.expression.getText()) > -1
           ) {
             isIncludeSpecificDecor = true;
           } else if (
             ts.isCallExpression(decorator.expression) &&
-            decorator.expression.expression.getText() === decoratorName
+            decoratorNameList.indexOf(decorator.expression.expression.getText()) > -1
           ) {
             isIncludeSpecificDecor = true;
           }
@@ -31,4 +31,3 @@ export namespace customEntryFilters {
     };
   }
 }
-

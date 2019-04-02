@@ -43,7 +43,10 @@ class Parent {
     a: 2,
     b: 5,
     ds: a.dsg(),
-    ha: L
+    ha: L,
+    dsf(a: string) {
+      return "213"
+    }
   })
   private haq!: { name: string; detail: L };
   protected func(a: string) {

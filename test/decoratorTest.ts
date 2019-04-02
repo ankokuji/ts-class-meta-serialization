@@ -11,8 +11,8 @@ function main() {
   const cwd = process.cwd();
   const entry = path.join(cwd, "./template/tsTemplate/index.ts");
   const output = serializeTsFiles([entry], {
-    classEntryFilter: customEntryFilters.isDecoratedBy("Component"),
-    serializeDecorator: customDecoratorSerilize.serializeLiteralDecorator(["Component", "Prop"])
+    classEntryFilter: customEntryFilters.isDecoratedBy(["Component"]),
+    serializeDecorator: customDecoratorSerilize.serializeLiteralDecorator(["Component", "Prop", "Inject"])
   });
   fs.writeFileSync("classes.json", JSON.stringify(output, undefined, 2));
   return;
