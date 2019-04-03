@@ -1,6 +1,6 @@
 {
   "name": "ts-meta-extract",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "author": "huguang",
   "module": "dist/index.js",
   "main": "dist/index.js",

@@ -1,5 +1,6 @@
 import ts from "typescript";
 import _ from "lodash";
+import { curryRight2 } from "./utils";
 
 const invertedTypeFlag = _.invert(ts.TypeFlags);
 const invertedSymbolFlag = _.invert(ts.SymbolFlags);
@@ -14,7 +15,7 @@ export namespace serializer {
      * @memberof SerializerOptions
      */
     classEntryFilter?(node: ts.ClassDeclaration): boolean;
-    serializeDecorator?(node: ts.Decorator): any;
+    serializeDecorator?(node: ts.Decorator, checker?: ts.TypeChecker): any;
     /**
      * Use this to generate a compiler host for creating program.
      *
@@ -125,7 +126,11 @@ function visit(node: ts.Node, ctx: serializer.Context, output: any[]) {
       const serializedDps = Object.keys(classMap)
         .map(key => classMap[key])
         .map(classMapVal => {
-          return serializeComplexType(classMapVal, checker, options.serializeDecorator);
+          return serializeComplexType(
+            classMapVal,
+            checker,
+            options.serializeDecorator
+          );
         });
       output.push({
         root: serializedRootClass,
@@ -146,7 +151,7 @@ function visit(node: ts.Node, ctx: serializer.Context, output: any[]) {
 function serializeComplexType(
   mapItem: DepMapItem,
   checker: ts.TypeChecker,
-  decoratorSerializeFun?: (node: ts.Decorator) => any
+  decoratorSerializeFun?: (node: ts.Decorator, checker: ts.TypeChecker) => any
 ) {
   switch (mapItem.symbolFlags) {
     case ts.SymbolFlags.Class:
@@ -262,17 +267,23 @@ function serializeDecorator(
 function serializeClass(
   symbol: ts.Symbol,
   checker: ts.TypeChecker,
-  decoratorSerializeFun?: (node: ts.Decorator) => any
+  decoratorSerializeFun?: (node: ts.Decorator, checker: ts.TypeChecker) => any
 ) {
+  let currySerializeFun: ((node: ts.Decorator) => any) | undefined = undefined;
+  if (decoratorSerializeFun) {
+    currySerializeFun = curryRight2(decoratorSerializeFun)(checker);
+  }
   const detail = serializeSymbolWithDecoratorInfo(
     symbol,
     checker,
-    decoratorSerializeFun
+    currySerializeFun
   );
   const members: SerializedSymbol[] = [];
   if (symbol.members) {
     symbol.members.forEach(action => {
-      members.push(serializeSymbolWithDecoratorInfo(action, checker, decoratorSerializeFun));
+      members.push(
+        serializeSymbolWithDecoratorInfo(action, checker, currySerializeFun)
+      );
     });
   }
   return {
