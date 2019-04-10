@@ -6,6 +6,14 @@ function Component(flag: boolean) {
   }
 }
 
+class Generic<T> {
+  private s!:T;
+}
+
+class GenericDep {
+  private qq!: string;
+}
+
 class L {
   private name!: string
 }
@@ -30,14 +38,22 @@ class Vechical {
 
 @Component(true)
 class Parent {
-  private ah: number;
+  // private ah: number;
 
-  public detail!: AliasOfA;
-  constructor() {
-    this.ah = 1;
-  }
-  private sdf!: Enum1;
-  private sha!: boolean;
+  // public detail!: AliasOfA;
+  // constructor() {
+  //   this.ah = 1;
+  // }
+  // private sdf!: Enum1;
+  // private sha!: boolean;
+
+  private generic!: Generic<GenericDep>;
+
+  private ss!: string;
+  private hh!: number;
+  private uy!: boolean;
+
+  private hb!: string[];
 
   @Prop({
     a: 2,
@@ -45,7 +61,7 @@ class Parent {
     ds: a.dsg(),
     ha: L,
     dsf(a: string) {
-      return "213"
+      return "213";
     }
   })
   private haq!: { name: string; detail: L };

@@ -197,15 +197,19 @@ function serializeSymbol(symbol: ts.Symbol, checker: ts.TypeChecker) {
     return {
       name: symbol.getName(),
       type: undefined,
+      isPrimitiveType: false,
       text: undefined,
       symbolType: invertedSymbolFlag[symbol.flags]
     };
   } else {
+    const type = checker.getTypeOfSymbolAtLocation(
+      symbol,
+      symbol.valueDeclaration!
+    );
     return {
       name: symbol.getName(),
-      type: checker.typeToString(
-        checker.getTypeOfSymbolAtLocation(symbol, symbol.valueDeclaration!)
-      ),
+      type: checker.typeToString(type),
+      isPrimitiveType: isPrimitiveType(type),
       text: symbol.valueDeclaration.getText(),
       symbolType: invertedSymbolFlag[symbol.flags]
     };
