@@ -49,11 +49,12 @@ class Parent {
 
   private generic!: Generic<GenericDep>;
 
-  private ss!: string;
-  private hh!: number;
-  private uy!: boolean;
+  // private ss!: string;
+  // private hh!: number;
+  // private uy!: boolean;
 
   private hb!: string[];
+  private ho!: Array<string>;
 
   @Prop({
     a: 2,

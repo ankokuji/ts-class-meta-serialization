@@ -1,9 +1,43 @@
 import ts from "typescript";
-import _ from "lodash";
+import _ from "lodash/fp";
 import { curryRight2 } from "./utils";
 
 const invertedTypeFlag = _.invert(ts.TypeFlags);
 const invertedSymbolFlag = _.invert(ts.SymbolFlags);
+
+export namespace typeCheck {
+  export function isTypeLiteralType(type: ts.Type): boolean {
+    const symbol = type.getSymbol();
+    if (symbol && symbol.flags === ts.SymbolFlags.TypeLiteral) {
+      return true;
+    } else {
+      return false;
+    }
+  }
+
+  /**
+   * Used to determine if type is `Array` in es5 standard.
+   * Because `*[]` type declaration in ts is the same as generic `Array<*>`.
+   * And type `Array` also can be a self declared class or type.
+   * 
+   * NOTE: This implementation uses ts default lib file path.
+   *
+   * @export
+   * @param {ts.Type} type
+   * @returns {boolean}
+   */
+  export function isES5ArrayType(type: ts.Type): boolean {
+    const symbol = type.getSymbol();
+    if(symbol && symbol.name === "Array") {
+      const fileName = getFileNameFromSymbol(symbol);
+      const tsFilePath = _.compose(_.join("/"), _.takeRight(3), _.split("/"))(fileName);
+      if ("typescript/lib/lib.es5.d.ts" === tsFilePath) {
+        return true;
+      }
+    }
+    return false
+  }
+}
 
 export namespace serializer {
   export interface SerializerOptions {
@@ -34,16 +68,20 @@ export namespace serializer {
     };
   }
 
-  export interface Context {
+  export interface SerializerContext {
     checker: ts.TypeChecker;
     options: SerializerOptions;
   }
-}
 
-interface SerializedSymbol {
-  type: string | undefined;
-  name: string;
-  text: string | undefined;
+  export interface SerializedSymbol {
+    type: string | undefined;
+    name: string;
+    text: string | undefined;
+    isPrimitiveType: boolean;
+    symbolType: boolean;
+    genericTypeArgs: string[] | undefined;
+    isArray: boolean;
+  }
 }
 
 interface ClassDepMap {
@@ -69,7 +107,7 @@ export function serializeTsFiles(
   serializerOptions?: serializer.SerializerOptions
 ) {
   const compilerOptions = {
-    target: ts.ScriptTarget.ES5,
+    target: ts.ScriptTarget.ES2015,
     module: ts.ModuleKind.CommonJS,
     types: []
   };
@@ -87,7 +125,7 @@ export function serializeTsFiles(
 
   const typeChecker = program.getTypeChecker();
   const output: any[] = [];
-  const ctx: serializer.Context = {
+  const ctx: serializer.SerializerContext = {
     checker: typeChecker,
     options: serializerOptions
   };
@@ -107,7 +145,11 @@ export function serializeTsFiles(
   return output;
 }
 
-function visit(node: ts.Node, ctx: serializer.Context, output: any[]) {
+function visit(
+  node: ts.Node,
+  ctx: serializer.SerializerContext,
+  output: any[]
+) {
   const { checker, options } = ctx;
   if (ts.isClassDeclaration(node) && node.name) {
     if (options.classEntryFilter && !options.classEntryFilter(node)) {
@@ -192,26 +234,38 @@ function serializeRegularEnum(symbol: ts.Symbol, checker: ts.TypeChecker) {
   };
 }
 
-function serializeSymbol(symbol: ts.Symbol, checker: ts.TypeChecker) {
+function serializeSymbol(
+  symbol: ts.Symbol,
+  checker: ts.TypeChecker
+): serializer.SerializedSymbol {
   if (!symbol.valueDeclaration) {
     return {
       name: symbol.getName(),
       type: undefined,
       isPrimitiveType: false,
       text: undefined,
-      symbolType: invertedSymbolFlag[symbol.flags]
+      symbolType: invertedSymbolFlag[symbol.flags],
+      genericTypeArgs: undefined,
+      isArray: false
     };
   } else {
     const type = checker.getTypeOfSymbolAtLocation(
       symbol,
       symbol.valueDeclaration!
     );
+    const generics =
+      (type as any).typeArguments &&
+      (type as any).typeArguments.map((type: ts.Type) => {
+        return checker.typeToString(type);
+      });
     return {
       name: symbol.getName(),
       type: checker.typeToString(type),
       isPrimitiveType: isPrimitiveType(type),
       text: symbol.valueDeclaration.getText(),
-      symbolType: invertedSymbolFlag[symbol.flags]
+      symbolType: invertedSymbolFlag[symbol.flags],
+      genericTypeArgs: generics,
+      isArray: typeCheck.isES5ArrayType(type)
     };
   }
 }
@@ -282,7 +336,7 @@ function serializeClass(
     checker,
     currySerializeFun
   );
-  const members: SerializedSymbol[] = [];
+  const members: serializer.SerializedSymbol[] = [];
   if (symbol.members) {
     symbol.members.forEach(action => {
       members.push(
@@ -333,26 +387,12 @@ function collectDepOfClass(
     ) {
       return depMap;
     }
-    // Because this type is not a primitive type.
-    // `symbol` here will not be undefined.
+    // Because `type` is not a primitive type.
+    // So `symbol` here won't be `undefined`.
     const symbol = type.getSymbol();
     const symbolFlags = getSymbolFlagFromSymbol(symbol!);
-
-    // Collect dependencies.
-    // If type is a type literal, don't add it to dependencies map.
-    if (!isTypeLiteralType(type)) {
-      // This getId function can not be called with a type literal symbol.
-      // NOTE: Or should id's generation be reconsidered.
-      const id = getIdentificationOfSymbol(symbol!);
-      const fileName = getFileNameFromSymbol(symbol!);
-      const textRange = getTextSpanFromSymbol(symbol!);
-      if (depMap[id]) {
-        return depMap;
-      }
-      depMap[id] = { type, symbolFlags, fileName, textRange };
-    }
-
-    return collectDepDistinType(type, checker, symbolFlags, depMap);
+    const map = collectDep(type, depMap);
+    return collectDepDistinType(type, checker, symbolFlags, map);
 
     /**
      * Collect all dependencies of `Type` with different symbol type of `Type`.
@@ -406,7 +446,16 @@ function collectDepOfClass(
       checker: ts.TypeChecker,
       depMap: ClassDepMap
     ): ClassDepMap {
-      return collectDepWithTypeProperties(type, checker, depMap);
+      let map = depMap;
+      if ((type as any).typeArguments) {
+        map = (type as any).typeArguments.reduce(
+          (accum: ClassDepMap, type: ts.Type) => {
+            return collectDepWithDepMap(type, checker, accum);
+          },
+          depMap
+        );
+      }
+      return collectDepWithTypeProperties(type, checker, map);
     }
 
     /**
@@ -442,6 +491,44 @@ function collectDepOfClass(
       return depMap;
     }
   }
+}
+
+/**
+ * Determine if type should be added to dependencies.
+ *
+ * @param {ts.Type} type
+ * @param {ClassDepMap} depMap
+ * @returns
+ */
+function collectDep(type: ts.Type, depMap: ClassDepMap) {
+  // If type is a primitive type or method type then don't add into dep map.
+  if (isPrimitiveType(type) || isClassMethodType(type) || isUnknownType(type)) {
+    return depMap;
+  }
+  // Because this type is not a primitive type.
+  // `symbol` here will not be undefined.
+  const symbol = type.getSymbol();
+  const symbolFlags = getSymbolFlagFromSymbol(symbol!);
+
+  // Collect dependencies.
+  // If type is a "type literal" or "es5 Array type", don't add it to dependencies map.
+  if (!typeCheck.isTypeLiteralType(type) && !typeCheck.isES5ArrayType(type)) {
+    // This getId function can not be called with a type literal symbol.
+    // NOTE: Or should id's generation be reconsidered.
+    const id = getIdentificationOfSymbol(symbol!);
+    const fileName = getFileNameFromSymbol(symbol!);
+    const textRange = getTextSpanFromSymbol(symbol!);
+    if (depMap[id]) {
+      return depMap;
+    }
+    depMap[id] = {
+      type,
+      symbolFlags,
+      fileName,
+      textRange
+    };
+  }
+  return depMap;
 }
 
 /**
@@ -482,14 +569,6 @@ function isUnknownType(type: ts.Type): boolean {
   if (!symbol) {
     return true;
   } else if (!symbol.valueDeclaration && !symbol.declarations) {
-    return true;
-  } else {
-    return false;
-  }
-}
-function isTypeLiteralType(type: ts.Type): boolean {
-  const symbol = type.getSymbol();
-  if (symbol && symbol.flags === ts.SymbolFlags.TypeLiteral) {
     return true;
   } else {
     return false;
