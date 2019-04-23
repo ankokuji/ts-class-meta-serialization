@@ -36,6 +36,9 @@ class Vechical {
   }
 }
 
+class GenDep {
+  private a!: string
+}
 @Component(true)
 class Parent {
   // private ah: number;
@@ -54,7 +57,7 @@ class Parent {
   // private uy!: boolean;
 
   private hb!: string[];
-  private ho!: Array<string>;
+  private ho!: Array<GenDep>;
 
   @Prop({
     a: 2,

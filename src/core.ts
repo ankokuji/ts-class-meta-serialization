@@ -392,7 +392,7 @@ function collectDepOfClass(
     const symbol = type.getSymbol();
     const symbolFlags = getSymbolFlagFromSymbol(symbol!);
     const map = collectDep(type, depMap);
-    return collectDepDistinType(type, checker, symbolFlags, map);
+    return collectDepWithDistinType(type, checker, symbolFlags, map);
 
     /**
      * Collect all dependencies of `Type` with different symbol type of `Type`.
@@ -403,7 +403,7 @@ function collectDepOfClass(
      * @param {ClassDepMap} depMap
      * @returns {ClassDepMap}
      */
-    function collectDepDistinType(
+    function collectDepWithDistinType(
       type: ts.Type,
       checker: ts.TypeChecker,
       symbolFlags: ts.SymbolFlags,
@@ -429,6 +429,13 @@ function collectDepOfClass(
           //     type
           //   )}, symbol type: ${invertedSymbolFlag[symbolFlags]}`
           // );
+          if(typeCheck.isES5ArrayType(type)) {
+            // `Array` was declared as a variable in ts' es5 lib.
+            // So it won't go into `Class` branch. Dependencies of 
+            // generic `Array<*>` or `*[]` should be treat especially.
+            collectTypeArgumentsDep(type, depMap);
+
+          }
           return depMap;
       }
     }
@@ -446,6 +453,18 @@ function collectDepOfClass(
       checker: ts.TypeChecker,
       depMap: ClassDepMap
     ): ClassDepMap {
+      const map = collectTypeArgumentsDep(type, depMap);
+      return collectDepWithTypeProperties(type, checker, map);
+    }
+
+    /**
+     * Collect.
+     *
+     * @param {ts.Type} type
+     * @param {ClassDepMap} depMap
+     * @returns
+     */
+    function collectTypeArgumentsDep(type: ts.Type, depMap: ClassDepMap) {
       let map = depMap;
       if ((type as any).typeArguments) {
         map = (type as any).typeArguments.reduce(
@@ -455,7 +474,7 @@ function collectDepOfClass(
           depMap
         );
       }
-      return collectDepWithTypeProperties(type, checker, map);
+      return map;
     }
 
     /**
