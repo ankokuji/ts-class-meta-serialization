@@ -7,9 +7,11 @@ import {
 } from "../src/index";
 import fs from "fs";
 
+const MODULE_TEMPLATE_ENTRY = "./template/moduleTemplate/index.ts";
+
 function main() {
   const cwd = process.cwd();
-  const entry = path.join(cwd, "./template/tsTemplate/index.ts");
+  const entry = path.join(cwd, MODULE_TEMPLATE_ENTRY);
   const output = serializeTsFiles([entry], {
     classEntryFilter: customEntryFilters.isDecoratedBy(["Component"]),
     serializeDecorator: customDecoratorSerilize.serializeLiteralDecorator(["Component", "Prop", "Inject"])

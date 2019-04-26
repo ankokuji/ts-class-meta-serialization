@@ -1,11 +1,65 @@
 import ts from "typescript";
 import _ from "lodash/fp";
-import { curryRight2 } from "./utils";
+import {
+  curryRight2,
+  getFileNameFromSymbol,
+  getIdentificationOfSymbol,
+  getTextSpanFromSymbol
+} from "./utils";
+import { UnknownTypeError } from "./error";
 
 const invertedTypeFlag = _.invert(ts.TypeFlags);
 const invertedSymbolFlag = _.invert(ts.SymbolFlags);
 
 export namespace typeCheck {
+  export function isErrorType(type: ts.Type): boolean {
+    return (
+      type.flags === ts.TypeFlags.Any &&
+      (type as any).intrinsicName &&
+      (type as any).intrinsicName === "error"
+    );
+  }
+  /**
+   * This is for some type like type literal and others with name such as `__type`,
+   * but can't be identified by symbol flag.
+   *
+   * @param {ts.Type} type
+   * @returns {boolean}
+   */
+  export function isUnknownType(type: ts.Type): boolean {
+    const symbol = type.getSymbol();
+    if (!symbol) {
+      return true;
+    } else if (!symbol.valueDeclaration && !symbol.declarations) {
+      return true;
+    } else {
+      return false;
+    }
+  }
+  /**
+   *
+   *
+   * @param {ts.Type} type
+   * @returns {boolean}
+   */
+  export function isClassMethodType(type: ts.Type): boolean {
+    const symbol = type.getSymbol();
+    if (symbol && symbol.flags === ts.SymbolFlags.Method) {
+      return true;
+    } else {
+      return false;
+    }
+  }
+  /**
+   * True if type is a primitive type (`string`, `number`, `boolean`)
+   * NOTE: This may be not appropriate.
+   *
+   * @param {ts.Type} type
+   * @returns
+   */
+  export function isPrimitiveType(type: ts.Type): boolean {
+    return !type.getSymbol();
+  }
   export function isTypeLiteralType(type: ts.Type): boolean {
     const symbol = type.getSymbol();
     if (symbol && symbol.flags === ts.SymbolFlags.TypeLiteral) {
@@ -19,7 +73,7 @@ export namespace typeCheck {
    * Used to determine if type is `Array` in es5 standard.
    * Because `*[]` type declaration in ts is the same as generic `Array<*>`.
    * And type `Array` also can be a self declared class or type.
-   * 
+   *
    * NOTE: This implementation uses ts default lib file path.
    *
    * @export
@@ -28,14 +82,18 @@ export namespace typeCheck {
    */
   export function isES5ArrayType(type: ts.Type): boolean {
     const symbol = type.getSymbol();
-    if(symbol && symbol.name === "Array") {
+    if (symbol && symbol.name === "Array") {
       const fileName = getFileNameFromSymbol(symbol);
-      const tsFilePath = _.compose(_.join("/"), _.takeRight(3), _.split("/"))(fileName);
+      const tsFilePath = _.compose(
+        _.join("/"),
+        _.takeRight(3),
+        _.split("/")
+      )(fileName);
       if ("typescript/lib/lib.es5.d.ts" === tsFilePath) {
         return true;
       }
     }
-    return false
+    return false;
   }
 }
 
@@ -261,7 +319,7 @@ function serializeSymbol(
     return {
       name: symbol.getName(),
       type: checker.typeToString(type),
-      isPrimitiveType: isPrimitiveType(type),
+      isPrimitiveType: typeCheck.isPrimitiveType(type),
       text: symbol.valueDeclaration.getText(),
       symbolType: invertedSymbolFlag[symbol.flags],
       genericTypeArgs: generics,
@@ -379,11 +437,16 @@ function collectDepOfClass(
     checker: ts.TypeChecker,
     depMap: ClassDepMap
   ): ClassDepMap {
+    if (typeCheck.isErrorType(type)) {
+      throw new Error(
+        `Type parse error with type ${checker.typeToString(type)}.`
+      );
+    }
     // If type is a primitive type or method type then don't add into dep map.
     if (
-      isPrimitiveType(type) ||
-      isClassMethodType(type) ||
-      isUnknownType(type)
+      typeCheck.isPrimitiveType(type) ||
+      typeCheck.isClassMethodType(type) ||
+      typeCheck.isUnknownType(type)
     ) {
       return depMap;
     }
@@ -429,12 +492,11 @@ function collectDepOfClass(
           //     type
           //   )}, symbol type: ${invertedSymbolFlag[symbolFlags]}`
           // );
-          if(typeCheck.isES5ArrayType(type)) {
+          if (typeCheck.isES5ArrayType(type)) {
             // `Array` was declared as a variable in ts' es5 lib.
-            // So it won't go into `Class` branch. Dependencies of 
+            // So it won't go into `Class` branch. Dependencies of
             // generic `Array<*>` or `*[]` should be treat especially.
             collectTypeArgumentsDep(type, depMap);
-
           }
           return depMap;
       }
@@ -458,7 +520,8 @@ function collectDepOfClass(
     }
 
     /**
-     * Collect.
+     * Collect type arguments(complex types in generics).
+     * For example type T, S in `Class<T, S>`.
      *
      * @param {ts.Type} type
      * @param {ClassDepMap} depMap
@@ -469,7 +532,13 @@ function collectDepOfClass(
       if ((type as any).typeArguments) {
         map = (type as any).typeArguments.reduce(
           (accum: ClassDepMap, type: ts.Type) => {
-            return collectDepWithDepMap(type, checker, accum);
+            let map = accum;
+            try {
+              map = collectDepWithDepMap(type, checker, map);
+            } catch(e) {
+              throw new UnknownTypeError(type.symbol);
+            }
+            return map;
           },
           depMap
         );
@@ -505,7 +574,11 @@ function collectDepOfClass(
             symbol,
             symbol.valueDeclaration
           );
-          collectDepWithDepMap(type, checker, depMap);
+          try {
+            collectDepWithDepMap(type, checker, depMap);
+          } catch(e) {
+            throw new UnknownTypeError(symbol);
+          }
         });
       return depMap;
     }
@@ -521,7 +594,11 @@ function collectDepOfClass(
  */
 function collectDep(type: ts.Type, depMap: ClassDepMap) {
   // If type is a primitive type or method type then don't add into dep map.
-  if (isPrimitiveType(type) || isClassMethodType(type) || isUnknownType(type)) {
+  if (
+    typeCheck.isPrimitiveType(type) ||
+    typeCheck.isClassMethodType(type) ||
+    typeCheck.isUnknownType(type)
+  ) {
     return depMap;
   }
   // Because this type is not a primitive type.
@@ -551,50 +628,6 @@ function collectDep(type: ts.Type, depMap: ClassDepMap) {
 }
 
 /**
- * True if type is a primitive type (`string`, `number`, `boolean`)
- * NOTE: This may be not appropriate.
- *
- * @param {ts.Type} type
- * @returns
- */
-function isPrimitiveType(type: ts.Type): boolean {
-  return !type.getSymbol();
-}
-
-/**
- *
- *
- * @param {ts.Type} type
- * @returns {boolean}
- */
-function isClassMethodType(type: ts.Type): boolean {
-  const symbol = type.getSymbol();
-  if (symbol && symbol.flags === ts.SymbolFlags.Method) {
-    return true;
-  } else {
-    return false;
-  }
-}
-
-/**
- * This is for some type like type literal and others with name such as `__type`,
- * but can't be identified by symbol flag.
- *
- * @param {ts.Type} type
- * @returns {boolean}
- */
-function isUnknownType(type: ts.Type): boolean {
-  const symbol = type.getSymbol();
-  if (!symbol) {
-    return true;
-  } else if (!symbol.valueDeclaration && !symbol.declarations) {
-    return true;
-  } else {
-    return false;
-  }
-}
-
-/**
  * Get the symbol flag of specific type.
  * Which indicates the detailed type informations.
  *
@@ -603,33 +636,4 @@ function isUnknownType(type: ts.Type): boolean {
  */
 function getSymbolFlagFromSymbol(symbol: ts.Symbol): ts.SymbolFlags {
   return symbol.flags;
-}
-
-function getIdentificationOfSymbol(symbol: ts.Symbol): string {
-  const fileName = getFileNameFromSymbol(symbol);
-  return `${fileName}-${symbol.getName()}`;
-}
-
-function getTextSpanFromSymbol(symbol: ts.Symbol): ts.TextRange {
-  let declaration;
-  if (symbol.valueDeclaration) {
-    declaration = symbol.valueDeclaration;
-  } else {
-    declaration = symbol.declarations.slice()[0];
-  }
-  return {
-    pos: declaration.pos,
-    end: declaration.end
-  };
-}
-
-function getFileNameFromSymbol(symbol: ts.Symbol): string {
-  let sourceFile: ts.SourceFile;
-  if (symbol.valueDeclaration) {
-    // If value declaration exists.
-    sourceFile = symbol.valueDeclaration.getSourceFile();
-  } else {
-    sourceFile = symbol.declarations.slice()[0].getSourceFile();
-  }
-  return sourceFile.fileName;
 }
