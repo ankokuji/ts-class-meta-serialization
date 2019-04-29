@@ -1,6 +1,6 @@
 {
   "name": "ts-meta-extract",
-  "version": "0.6.1",
+  "version": "0.6.4",
   "author": "huguang",
   "module": "dist/index.js",
   "main": "dist/index.js",
@@ -11,14 +11,14 @@
   },
   "devDependencies": {
     "@types/node": "^11.11.4",
-    "ts-node": "^8.0.3"
+    "ts-node": "^8.0.3",
+    "typescript": "^3.4.5"
   },
   "peerDependencies": {
-    "typescript": "^3.3.4000"
+    "typescript": "^3.4.5"
   },
   "dependencies": {
-    "lodash": "^4.17.11",
-    "typescript": "^3.4.5"
+    "lodash": "^4.17.11"
   },
   "keywords": [
     "typescript",
