@@ -2,6 +2,7 @@ import ts from "typescript";
 import _ from "lodash/fp";
 import {
   curryRight2,
+  curryRight3,
   getFileNameFromSymbol,
   getIdentificationOfSymbol,
   getTextSpanFromSymbol
@@ -20,21 +21,49 @@ export namespace typeCheck {
     );
   }
   /**
-   * This is for some type like type literal and others with name such as `__type`,
+   * This is for some types needed no dep collection
+   * like `type literal` and some with names such as `__type`,
    * but can't be identified by symbol flag.
+   *
+   * `UnsupportedType` includes all types that needn't to be collected
+   * except for advanced types.
    *
    * @param {ts.Type} type
    * @returns {boolean}
    */
-  export function isUnknownType(type: ts.Type): boolean {
+  export function isUnsupportedTypeForDepCollection(type: ts.Type): boolean {
     const symbol = type.getSymbol();
     if (!symbol) {
-      return true;
+      // If a type did not have a symbol, only when the type can be identified as
+      // a advanced type will it be collected into dependencies.
+      if (!typeCheck.isAdvancedTypes(type)) {
+        // Type didn't have a symbol and wasn't advanced types.
+        return true;
+      }
     } else if (!symbol.valueDeclaration && !symbol.declarations) {
+      // Currently if a symbol had no value declaration then there is no need
+      // to add this symbol type into dependencies.
       return true;
-    } else {
-      return false;
     }
+    return false;
+  }
+
+  /**
+   * Currently only detect intersection type.
+   *
+   * @export
+   * @param {ts.Type} type
+   */
+  export function isAdvancedTypes(type: ts.Type) {
+    return isIntersectionType(type) || isUnionType(type);
+  }
+
+  export function isIntersectionType(type: ts.Type) {
+    return !!(type.flags & ts.TypeFlags.Intersection);
+  }
+
+  export function isUnionType(type: ts.Type) {
+    return !!(type.flags & ts.TypeFlags.Union);
   }
   /**
    *
@@ -58,7 +87,9 @@ export namespace typeCheck {
    * @returns
    */
   export function isPrimitiveType(type: ts.Type): boolean {
-    return !type.getSymbol();
+    const primitiveFlags =
+      ts.TypeFlags.String | ts.TypeFlags.Boolean | ts.TypeFlags.Number;
+    return !!(type.flags & primitiveFlags);
   }
   export function isTypeLiteralType(type: ts.Type): boolean {
     const symbol = type.getSymbol();
@@ -138,6 +169,8 @@ export namespace serializer {
     isPrimitiveType: boolean;
     symbolType: boolean;
     genericTypeArgs: string[] | undefined;
+
+    typeOfAdvancedType: string | null;
     isArray: boolean;
   }
 }
@@ -296,6 +329,7 @@ function serializeSymbol(
   symbol: ts.Symbol,
   checker: ts.TypeChecker
 ): serializer.SerializedSymbol {
+  // `symbol` has no value declaration.
   if (!symbol.valueDeclaration) {
     return {
       name: symbol.getName(),
@@ -303,6 +337,7 @@ function serializeSymbol(
       isPrimitiveType: false,
       text: undefined,
       symbolType: invertedSymbolFlag[symbol.flags],
+      typeOfAdvancedType: null,
       genericTypeArgs: undefined,
       isArray: false
     };
@@ -311,20 +346,46 @@ function serializeSymbol(
       symbol,
       symbol.valueDeclaration!
     );
-    const generics =
-      (type as any).typeArguments &&
-      (type as any).typeArguments.map((type: ts.Type) => {
-        return checker.typeToString(type);
-      });
+    const generics = getGenericsOfType(type);
+    const advancedType = getTypeOfAdvancedType(type);
+    const serializedType = typeCheck.isAdvancedTypes(type)
+      ? (type as any).types.map(
+          curryRight3(checker.typeToString)(undefined)(undefined)
+        )
+      : checker.typeToString(type);
     return {
       name: symbol.getName(),
-      type: checker.typeToString(type),
+      type: serializedType,
       isPrimitiveType: typeCheck.isPrimitiveType(type),
+      typeOfAdvancedType: advancedType,
       text: symbol.valueDeclaration.getText(),
       symbolType: invertedSymbolFlag[symbol.flags],
       genericTypeArgs: generics,
       isArray: typeCheck.isES5ArrayType(type)
     };
+  }
+
+  function getTypeOfAdvancedType(type: ts.Type): string | null {
+    enum AdvancedTypeString {
+      Union = "Union",
+      Intersection = "Intersection"
+    }
+    switch (type.flags) {
+      case ts.TypeFlags.Union:
+        return AdvancedTypeString.Union;
+      case ts.TypeFlags.Intersection:
+        return AdvancedTypeString.Intersection;
+    }
+    return null;
+  }
+
+  function getGenericsOfType(type: ts.Type) {
+    return (
+      (type as any).typeArguments &&
+      (type as any).typeArguments.map((type: ts.Type) => {
+        return checker.typeToString(type);
+      })
+    );
   }
 }
 
@@ -420,7 +481,7 @@ function collectDepOfClass(
 ): ClassDepMap {
   // Because the entry symbol in first augument is a class decoration.
   const type = checker.getDeclaredTypeOfSymbol(symbol);
-  const deps = collectDepWithDepMap(type, checker, Object.create(null));
+  const deps = collectDepWithTypeCheck(type, checker, Object.create(null));
   // Remove reference of root class self.
   const typeId = getIdentificationOfSymbol(symbol);
   delete deps[typeId];
@@ -432,7 +493,7 @@ function collectDepOfClass(
    * @param {ts.TypeChecker} checker
    * @param {*} depMap
    */
-  function collectDepWithDepMap(
+  function collectDepWithTypeCheck(
     type: ts.Type,
     checker: ts.TypeChecker,
     depMap: ClassDepMap
@@ -446,16 +507,16 @@ function collectDepOfClass(
     if (
       typeCheck.isPrimitiveType(type) ||
       typeCheck.isClassMethodType(type) ||
-      typeCheck.isUnknownType(type)
+      typeCheck.isUnsupportedTypeForDepCollection(type)
     ) {
       return depMap;
     }
     // Because `type` is not a primitive type.
     // So `symbol` here won't be `undefined`.
-    const symbol = type.getSymbol();
-    const symbolFlags = getSymbolFlagFromSymbol(symbol!);
-    const map = collectDep(type, depMap);
-    return collectDepWithDistinType(type, checker, symbolFlags, map);
+    // const symbol = type.getSymbol();
+    // const symbolFlags = getSymbolFlagFromSymbol(symbol!);
+    const map = addTypeSelfIntoDep(type, depMap);
+    return collectDepOfTypeChildren(type, checker, map);
 
     /**
      * Collect all dependencies of `Type` with different symbol type of `Type`.
@@ -466,12 +527,52 @@ function collectDepOfClass(
      * @param {ClassDepMap} depMap
      * @returns {ClassDepMap}
      */
-    function collectDepWithDistinType(
+    function collectDepOfTypeChildren(
       type: ts.Type,
       checker: ts.TypeChecker,
-      symbolFlags: ts.SymbolFlags,
       depMap: ClassDepMap
     ): ClassDepMap {
+      const symbol = type.getSymbol();
+      if (!symbol) {
+        // Is a advanced type.
+        return collectDepOfAdvancedType(type, checker, depMap);
+      } else {
+        return collectDepOfTypeWithSymbol(type, checker, symbol, depMap);
+      }
+    }
+
+    /**
+     * NOTE: Collecting an advanced type dependency is different from collecting
+     * other type dependencies. Instead of adding this type to the dependency
+     * in advance, every individual types of the advanced type are treated as
+     * separate types and `collectDepWithTypeCheck` is called iteratively when
+     * collecting children dependencied of current type.
+     *
+     * @param {ts.Type} type
+     * @param {ts.TypeChecker} checker
+     * @param {ClassDepMap} depMap
+     * @returns {ClassDepMap}
+     */
+    function collectDepOfAdvancedType(
+      type: ts.Type,
+      checker: ts.TypeChecker,
+      depMap: ClassDepMap
+    ): ClassDepMap {
+      return (type as any).types.reduce(
+        (depMap: ClassDepMap, type: ts.Type) => {
+          return collectDepWithTypeCheck(type, checker, depMap);
+        },
+        depMap
+      );
+    }
+
+    function collectDepOfTypeWithSymbol(
+      type: ts.Type,
+      checker: ts.TypeChecker,
+      symbol: ts.Symbol,
+      depMap: ClassDepMap
+    ) {
+      const symbolFlags = symbol.flags;
       switch (symbolFlags) {
         case ts.SymbolFlags.Class:
           return collectClassDep(type, checker, depMap);
@@ -534,8 +635,8 @@ function collectDepOfClass(
           (accum: ClassDepMap, type: ts.Type) => {
             let map = accum;
             try {
-              map = collectDepWithDepMap(type, checker, map);
-            } catch(e) {
+              map = collectDepWithTypeCheck(type, checker, map);
+            } catch (e) {
               throw new UnknownTypeError(type.symbol);
             }
             return map;
@@ -575,8 +676,8 @@ function collectDepOfClass(
             symbol.valueDeclaration
           );
           try {
-            collectDepWithDepMap(type, checker, depMap);
-          } catch(e) {
+            collectDepWithTypeCheck(type, checker, depMap);
+          } catch (e) {
             throw new UnknownTypeError(symbol);
           }
         });
@@ -592,39 +693,46 @@ function collectDepOfClass(
  * @param {ClassDepMap} depMap
  * @returns
  */
-function collectDep(type: ts.Type, depMap: ClassDepMap) {
-  // If type is a primitive type or method type then don't add into dep map.
-  if (
-    typeCheck.isPrimitiveType(type) ||
-    typeCheck.isClassMethodType(type) ||
-    typeCheck.isUnknownType(type)
-  ) {
-    return depMap;
-  }
+function addTypeSelfIntoDep(type: ts.Type, depMap: ClassDepMap) {
+  // If a type is primitive type or method type then don't add into dep map.
+  // Then it won't come into this function.
   // Because this type is not a primitive type.
   // `symbol` here will not be undefined.
   const symbol = type.getSymbol();
-  const symbolFlags = getSymbolFlagFromSymbol(symbol!);
-
-  // Collect dependencies.
-  // If type is a "type literal" or "es5 Array type", don't add it to dependencies map.
-  if (!typeCheck.isTypeLiteralType(type) && !typeCheck.isES5ArrayType(type)) {
-    // This getId function can not be called with a type literal symbol.
-    // NOTE: Or should id's generation be reconsidered.
-    const id = getIdentificationOfSymbol(symbol!);
-    const fileName = getFileNameFromSymbol(symbol!);
-    const textRange = getTextSpanFromSymbol(symbol!);
-    if (depMap[id]) {
-      return depMap;
-    }
-    depMap[id] = {
-      type,
-      symbolFlags,
-      fileName,
-      textRange
-    };
+  if (symbol) {
+    return collectWithSymbol(symbol, type, depMap);
   }
+  // If a type has no symbol, it will be an advanced type.
+  // This step did nothing to advanced types.
   return depMap;
+
+  function collectWithSymbol(
+    symbol: ts.Symbol,
+    type: ts.Type,
+    depMap: ClassDepMap
+  ): ClassDepMap {
+    const symbolFlags = getSymbolFlagFromSymbol(symbol);
+
+    // Collect dependencies.
+    // If type is a "type literal" or "es5 Array type", don't add it to dependencies map.
+    if (!typeCheck.isTypeLiteralType(type) && !typeCheck.isES5ArrayType(type)) {
+      // This getId function can not be called with a type literal symbol.
+      // NOTE: Or should id's generation be reconsidered.
+      const id = getIdentificationOfSymbol(symbol!);
+      const fileName = getFileNameFromSymbol(symbol!);
+      const textRange = getTextSpanFromSymbol(symbol!);
+      if (depMap[id]) {
+        return depMap;
+      }
+      depMap[id] = {
+        type,
+        symbolFlags,
+        fileName,
+        textRange
+      };
+    }
+    return depMap;
+  }
 }
 
 /**
