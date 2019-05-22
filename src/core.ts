@@ -162,21 +162,14 @@ export namespace serializer {
     options: SerializerOptions;
   }
 
-  export interface SerializedSymbol {
-    type: string | undefined;
-    name: string;
-    text: string | undefined;
-    isPrimitiveType: boolean;
-    symbolType: boolean;
-    genericTypeArgs: string[] | undefined;
-
-    typeOfAdvancedType: string | null;
-    isArray: boolean;
-  }
-
-  export interface Unstable_SerializedSymbol {
+  /**
+   *
+   *
+   * @export
+   * @interface Unstable_SerializedSymbol
+   */
+  export interface Unstable_SerializedSymbol extends Unstable_SerializedType {
     name: string | undefined;
-    generics: string[] | undefined;
     types: Unstable_SerializedType[] | undefined;
     typeOfAdvancedType: string | null;
     text: string | undefined;
@@ -184,8 +177,27 @@ export namespace serializer {
     decorators?: any[];
   }
   export interface Unstable_SerializedType {
+    type: string | undefined;
     isPrimitiveType: boolean;
     isArray: boolean;
+    genericTypeArgs: string[] | undefined;
+  }
+
+  export interface SerializedSymbol extends SerializedType {
+    name: string | undefined;
+    text: string | undefined;
+    symbolType: string;
+    decorators?: any[] | undefined;
+  }
+
+  export interface SerializedType {
+    typeOfAdvancedType: string | null;
+    type: string | undefined;
+    isPrimitiveType: boolean;
+    isArray: boolean;
+    genericTypeArgs: string[] | undefined;
+
+    childrenTypes: SerializedType[] | undefined;
   }
 }
 
@@ -325,11 +337,11 @@ function serializeComplexType(
  * @param {ts.TypeChecker} checker
  */
 function serializeRegularEnum(symbol: ts.Symbol, checker: ts.TypeChecker) {
-  const detail = unstable_serializeSymbol(symbol, checker);
+  const detail = unstable_serializeSymbol2(symbol, checker);
   const type = checker.getDeclaredTypeOfSymbol(symbol);
   const members = (type as any).types.map(type => {
     return {
-      symbol: unstable_serializeSymbol(type.getSymbol(), checker),
+      symbol: unstable_serializeSymbol2(type.getSymbol(), checker),
       value: type.value
     };
   });
@@ -354,9 +366,12 @@ function unstable_serializeSymbol(
   if (!symbol.valueDeclaration) {
     return {
       name: symbol.getName(),
-      generics: undefined,
+      genericTypeArgs: undefined,
       types: undefined,
+      isPrimitiveType: false,
+      type: undefined,
       text: undefined,
+      isArray: false,
       symbolType: invertedSymbolFlag[symbol.flags],
       typeOfAdvancedType: null
     };
@@ -366,27 +381,62 @@ function unstable_serializeSymbol(
       symbol.valueDeclaration!
     );
 
-    const basicSymbol = basicSerializeSymbol(symbol);
+    const basicSymbol = basicSerializeSymbol(symbol, type);
 
-    let types;
+    let types: serializer.Unstable_SerializedType[];
     if (typeCheck.isAdvancedTypes(type)) {
       types = (type as any).types.map(extendSerailizeSymbol);
     } else {
       types = [extendSerailizeSymbol(type)];
     }
     const typeOfAdvancedType = getTypeOfAdvancedType(type);
-    const generics = getGenericsOfType(type);
 
     const extensiveSymbol = {
       types,
-      typeOfAdvancedType,
-      generics
+      typeOfAdvancedType
     };
 
-    return Object.assign({}, basicSymbol, extensiveSymbol);
+    return Object.assign(
+      {},
+      basicSymbol,
+      extensiveSymbol
+    ) as serializer.Unstable_SerializedSymbol;
   }
 
-  function extendSerailizeSymbol(type: ts.Type) {
+  function serializedBasicSymbol(symbol: ts.Symbol) {
+    return {
+      name: symbol.getName(),
+      text: symbol.valueDeclaration.getText(),
+      symbolType: invertedSymbolFlag[symbol.flags]
+    };
+  }
+
+  function serializedTypeOfSymbol(symbol: ts.Symbol) {
+    const type = checker.getTypeOfSymbolAtLocation(
+      symbol,
+      symbol.valueDeclaration!
+    );
+    const generics = getGenericsOfType(type);
+    const advancedType = getTypeOfAdvancedType(type);
+    const serializedType = checker.typeToString(type);
+    return {
+      type: serializedType,
+      isPrimitiveType: typeCheck.isPrimitiveType(type),
+      typeOfAdvancedType: advancedType,
+      symbolType: invertedSymbolFlag[symbol.flags],
+      genericTypeArgs: generics,
+      isArray: typeCheck.isES5ArrayType(type)
+    };
+  }
+
+  function extendSerailizeSymbol(
+    type: ts.Type
+  ): {
+    type: string;
+    isPrimitiveType: boolean;
+    genericTypeArgs: string[] | undefined;
+    isArray: boolean;
+  } {
     const generics = getGenericsOfType(type);
     const serializedType = checker.typeToString(type);
     return {
@@ -397,11 +447,13 @@ function unstable_serializeSymbol(
     };
   }
 
-  function basicSerializeSymbol(symbol: ts.Symbol) {
+  function basicSerializeSymbol(symbol: ts.Symbol, type: ts.Type) {
     return {
       name: symbol.getName(),
       text: symbol.valueDeclaration.getText(),
-      symbolType: invertedSymbolFlag[symbol.flags]
+      symbolType: invertedSymbolFlag[symbol.flags],
+      isArray: typeCheck.isES5ArrayType(type),
+      genericTypeArgs: getGenericsOfType(type)
     };
   }
 
@@ -432,15 +484,13 @@ function unstable_serializeSymbol(
 }
 
 /**
- * WARNING: The data structure produced by this function has
- * bugs in presenting advanced types in typescript.
+ * New symbol serialization function to support advanced types.
  *
- * @deprecated
  * @param {ts.Symbol} symbol
  * @param {ts.TypeChecker} checker
- * @returns {serializer.SerializedSymbol}
+ * @returns
  */
-function serializeSymbol(
+function unstable_serializeSymbol2(
   symbol: ts.Symbol,
   checker: ts.TypeChecker
 ): serializer.SerializedSymbol {
@@ -448,34 +498,52 @@ function serializeSymbol(
   if (!symbol.valueDeclaration) {
     return {
       name: symbol.getName(),
-      type: undefined,
-      isPrimitiveType: false,
-      text: undefined,
-      symbolType: invertedSymbolFlag[symbol.flags],
-      typeOfAdvancedType: null,
       genericTypeArgs: undefined,
-      isArray: false
+      isPrimitiveType: false,
+      type: undefined,
+      text: undefined,
+      isArray: false,
+      childrenTypes: undefined,
+      symbolType: invertedSymbolFlag[symbol.flags],
+      typeOfAdvancedType: null
     };
   } else {
+    const basicSymbol = serializedBasicSymbol(symbol);
+
     const type = checker.getTypeOfSymbolAtLocation(
       symbol,
       symbol.valueDeclaration!
     );
-    const generics = getGenericsOfType(type);
-    const advancedType = getTypeOfAdvancedType(type);
-    const serializedType = typeCheck.isAdvancedTypes(type)
-      ? (type as any).types.map(
-          curryRight3(checker.typeToString)(undefined)(undefined)
-        )
-      : checker.typeToString(type);
+    const typeInfoOfSymbol = serializedTypeOfSymbol(type);
+
+    const out = {} as serializer.SerializedSymbol;
+    Object.assign(out, basicSymbol, typeInfoOfSymbol);
+    return out;
+  }
+
+  function serializedBasicSymbol(symbol: ts.Symbol) {
     return {
       name: symbol.getName(),
+      text: symbol.valueDeclaration.getText(),
+      symbolType: invertedSymbolFlag[symbol.flags]
+    };
+  }
+
+  function serializedTypeOfSymbol(type: ts.Type) {
+    const generics = getGenericsOfType(type);
+    const advancedType = getTypeOfAdvancedType(type);
+    const serializedType = checker.typeToString(type);
+    const childrenTypes = typeCheck.isAdvancedTypes(type)
+      ? (type as any).types.map(serializedTypeOfSymbol)
+      : undefined;
+
+    return {
       type: serializedType,
       isPrimitiveType: typeCheck.isPrimitiveType(type),
       typeOfAdvancedType: advancedType,
-      text: symbol.valueDeclaration.getText(),
       symbolType: invertedSymbolFlag[symbol.flags],
       genericTypeArgs: generics,
+      childrenTypes,
       isArray: typeCheck.isES5ArrayType(type)
     };
   }
@@ -494,10 +562,12 @@ function serializeSymbol(
     return null;
   }
 
-  function getGenericsOfType(type: ts.Type) {
+  function getGenericsOfType(type: ts.Type): string[] | undefined {
+    const typeArguments: ts.Type[] | undefined =
+      (type as any).typeArguments || (type as any).aliasTypeArguments;
     return (
-      (type as any).typeArguments &&
-      (type as any).typeArguments.map((type: ts.Type) => {
+      typeArguments &&
+      typeArguments.map((type: ts.Type) => {
         return checker.typeToString(type);
       })
     );
@@ -516,8 +586,8 @@ function serializeSymbolWithDecoratorInfo(
   symbol: ts.Symbol,
   checker: ts.TypeChecker,
   decoratorSerializeFun?: (node: ts.Decorator) => any
-): serializer.Unstable_SerializedSymbol {
-  const detail = unstable_serializeSymbol(symbol, checker);
+): serializer.SerializedSymbol {
+  const detail = unstable_serializeSymbol2(symbol, checker);
   let decorators: any = [];
   if (symbol.valueDeclaration && decoratorSerializeFun) {
     decorators = serializeDecorator(
@@ -570,7 +640,7 @@ function serializeClass(
     checker,
     currySerializeFun
   );
-  const members: serializer.Unstable_SerializedSymbol[] = [];
+  const members: serializer.SerializedSymbol[] = [];
   if (symbol.members) {
     symbol.members.forEach(action => {
       members.push(
