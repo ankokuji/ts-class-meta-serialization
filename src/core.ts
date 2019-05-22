@@ -173,6 +173,20 @@ export namespace serializer {
     typeOfAdvancedType: string | null;
     isArray: boolean;
   }
+
+  export interface Unstable_SerializedSymbol {
+    name: string | undefined;
+    generics: string[] | undefined;
+    types: Unstable_SerializedType[] | undefined;
+    typeOfAdvancedType: string | null;
+    text: string | undefined;
+    symbolType: string;
+    decorators?: any[];
+  }
+  export interface Unstable_SerializedType {
+    isPrimitiveType: boolean;
+    isArray: boolean;
+  }
 }
 
 interface ClassDepMap {
@@ -311,11 +325,11 @@ function serializeComplexType(
  * @param {ts.TypeChecker} checker
  */
 function serializeRegularEnum(symbol: ts.Symbol, checker: ts.TypeChecker) {
-  const detail = serializeSymbol(symbol, checker);
+  const detail = unstable_serializeSymbol(symbol, checker);
   const type = checker.getDeclaredTypeOfSymbol(symbol);
   const members = (type as any).types.map(type => {
     return {
-      symbol: serializeSymbol(type.getSymbol(), checker),
+      symbol: unstable_serializeSymbol(type.getSymbol(), checker),
       value: type.value
     };
   });
@@ -325,6 +339,107 @@ function serializeRegularEnum(symbol: ts.Symbol, checker: ts.TypeChecker) {
   };
 }
 
+/**
+ * New symbol serialization function to support advanced types.
+ *
+ * @param {ts.Symbol} symbol
+ * @param {ts.TypeChecker} checker
+ * @returns
+ */
+function unstable_serializeSymbol(
+  symbol: ts.Symbol,
+  checker: ts.TypeChecker
+): serializer.Unstable_SerializedSymbol {
+  // `symbol` has no value declaration.
+  if (!symbol.valueDeclaration) {
+    return {
+      name: symbol.getName(),
+      generics: undefined,
+      types: undefined,
+      text: undefined,
+      symbolType: invertedSymbolFlag[symbol.flags],
+      typeOfAdvancedType: null
+    };
+  } else {
+    const type = checker.getTypeOfSymbolAtLocation(
+      symbol,
+      symbol.valueDeclaration!
+    );
+
+    const basicSymbol = basicSerializeSymbol(symbol);
+
+    let types;
+    if (typeCheck.isAdvancedTypes(type)) {
+      types = (type as any).types.map(extendSerailizeSymbol);
+    } else {
+      types = [extendSerailizeSymbol(type)];
+    }
+    const typeOfAdvancedType = getTypeOfAdvancedType(type);
+    const generics = getGenericsOfType(type);
+
+    const extensiveSymbol = {
+      types,
+      typeOfAdvancedType,
+      generics
+    };
+
+    return Object.assign({}, basicSymbol, extensiveSymbol);
+  }
+
+  function extendSerailizeSymbol(type: ts.Type) {
+    const generics = getGenericsOfType(type);
+    const serializedType = checker.typeToString(type);
+    return {
+      type: serializedType,
+      isPrimitiveType: typeCheck.isPrimitiveType(type),
+      genericTypeArgs: generics,
+      isArray: typeCheck.isES5ArrayType(type)
+    };
+  }
+
+  function basicSerializeSymbol(symbol: ts.Symbol) {
+    return {
+      name: symbol.getName(),
+      text: symbol.valueDeclaration.getText(),
+      symbolType: invertedSymbolFlag[symbol.flags]
+    };
+  }
+
+  function getTypeOfAdvancedType(type: ts.Type): string | null {
+    enum AdvancedTypeString {
+      Union = "Union",
+      Intersection = "Intersection"
+    }
+    switch (type.flags) {
+      case ts.TypeFlags.Union:
+        return AdvancedTypeString.Union;
+      case ts.TypeFlags.Intersection:
+        return AdvancedTypeString.Intersection;
+    }
+    return null;
+  }
+
+  function getGenericsOfType(type: ts.Type): string[] | undefined {
+    const typeArguments: ts.Type[] | undefined =
+      (type as any).typeArguments || (type as any).aliasTypeArguments;
+    return (
+      typeArguments &&
+      typeArguments.map((type: ts.Type) => {
+        return checker.typeToString(type);
+      })
+    );
+  }
+}
+
+/**
+ * WARNING: The data structure produced by this function has
+ * bugs in presenting advanced types in typescript.
+ *
+ * @deprecated
+ * @param {ts.Symbol} symbol
+ * @param {ts.TypeChecker} checker
+ * @returns {serializer.SerializedSymbol}
+ */
 function serializeSymbol(
   symbol: ts.Symbol,
   checker: ts.TypeChecker
@@ -401,8 +516,8 @@ function serializeSymbolWithDecoratorInfo(
   symbol: ts.Symbol,
   checker: ts.TypeChecker,
   decoratorSerializeFun?: (node: ts.Decorator) => any
-) {
-  const detail = serializeSymbol(symbol, checker);
+): serializer.Unstable_SerializedSymbol {
+  const detail = unstable_serializeSymbol(symbol, checker);
   let decorators: any = [];
   if (symbol.valueDeclaration && decoratorSerializeFun) {
     decorators = serializeDecorator(
@@ -455,7 +570,7 @@ function serializeClass(
     checker,
     currySerializeFun
   );
-  const members: serializer.SerializedSymbol[] = [];
+  const members: serializer.Unstable_SerializedSymbol[] = [];
   if (symbol.members) {
     symbol.members.forEach(action => {
       members.push(
