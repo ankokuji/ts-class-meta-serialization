@@ -2,7 +2,6 @@ import ts from "typescript";
 import _ from "lodash/fp";
 import {
   curryRight2,
-  curryRight3,
   getFileNameFromSymbol,
   getIdentificationOfSymbol,
   getTextSpanFromSymbol
@@ -183,21 +182,21 @@ export namespace serializer {
     genericTypeArgs: string[] | undefined;
   }
 
-  export interface SerializedSymbol extends SerializedType {
+  export interface SerializedSymbol {
     name: string | undefined;
     text: string | undefined;
     symbolType: string;
     decorators?: any[] | undefined;
+    type: SerializedType;
   }
 
   export interface SerializedType {
     typeOfAdvancedType: string | null;
-    type: string | undefined;
+    typeString: string | undefined;
     isPrimitiveType: boolean;
     isArray: boolean;
     genericTypeArgs: string[] | undefined;
-
-    childrenTypes: SerializedType[] | undefined;
+    childTypes: SerializedType[] | undefined;
   }
 }
 
@@ -249,7 +248,7 @@ export function serializeTsFiles(
 
   for (const sourceFile of program.getSourceFiles()) {
     if (!sourceFile.isDeclarationFile) {
-      const innerOutput = [];
+      const innerOutput: any[] = [];
       ts.forEachChild(sourceFile, _.curryRight(visit)(innerOutput)(ctx));
       if (innerOutput.length !== 0) {
         output.push({
@@ -339,10 +338,10 @@ function serializeComplexType(
 function serializeRegularEnum(symbol: ts.Symbol, checker: ts.TypeChecker) {
   const detail = unstable_serializeSymbol2(symbol, checker);
   const type = checker.getDeclaredTypeOfSymbol(symbol);
-  const members = (type as any).types.map(type => {
+  const members = (type as any).types.map((type: ts.EnumType) => {
     return {
-      symbol: unstable_serializeSymbol2(type.getSymbol(), checker),
-      value: type.value
+      symbol: unstable_serializeSymbol2(type.getSymbol()!, checker),
+      value: (type as any).value
     };
   });
   return {
@@ -498,14 +497,16 @@ function unstable_serializeSymbol2(
   if (!symbol.valueDeclaration) {
     return {
       name: symbol.getName(),
-      genericTypeArgs: undefined,
-      isPrimitiveType: false,
-      type: undefined,
-      text: undefined,
-      isArray: false,
-      childrenTypes: undefined,
+      type: {
+        genericTypeArgs: undefined,
+        typeString: undefined,
+        isPrimitiveType: false,
+        isArray: false,
+        childTypes: undefined,
+        typeOfAdvancedType: null
+      },
       symbolType: invertedSymbolFlag[symbol.flags],
-      typeOfAdvancedType: null
+      text: undefined
     };
   } else {
     const basicSymbol = serializedBasicSymbol(symbol);
@@ -516,8 +517,10 @@ function unstable_serializeSymbol2(
     );
     const typeInfoOfSymbol = serializedTypeOfSymbol(type);
 
-    const out = {} as serializer.SerializedSymbol;
-    Object.assign(out, basicSymbol, typeInfoOfSymbol);
+    const out = {
+      ...basicSymbol,
+      type: typeInfoOfSymbol
+    } as serializer.SerializedSymbol;
     return out;
   }
 
@@ -529,21 +532,20 @@ function unstable_serializeSymbol2(
     };
   }
 
-  function serializedTypeOfSymbol(type: ts.Type) {
+  function serializedTypeOfSymbol(type: ts.Type): serializer.SerializedType {
     const generics = getGenericsOfType(type);
     const advancedType = getTypeOfAdvancedType(type);
     const serializedType = checker.typeToString(type);
-    const childrenTypes = typeCheck.isAdvancedTypes(type)
+    const childTypes = typeCheck.isAdvancedTypes(type)
       ? (type as any).types.map(serializedTypeOfSymbol)
       : undefined;
 
     return {
-      type: serializedType,
+      typeString: serializedType,
       isPrimitiveType: typeCheck.isPrimitiveType(type),
       typeOfAdvancedType: advancedType,
-      symbolType: invertedSymbolFlag[symbol.flags],
       genericTypeArgs: generics,
-      childrenTypes,
+      childTypes,
       isArray: typeCheck.isES5ArrayType(type)
     };
   }
